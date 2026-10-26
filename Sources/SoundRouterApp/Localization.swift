@@ -7,7 +7,7 @@ import Foundation
 /// 經過這個函式，就不會有人不小心漏掉 bundle。
 ///
 /// 帶參數的字串搭配 `String(format:)` 使用，例如：
-/// `String(format: L("row.helperProcesses"), count)`
+/// `String(format: L("row.mute"), app.name)`
 func L(_ key: String) -> String {
     Bundle.module.localizedString(forKey: key, value: nil, table: nil)
 }

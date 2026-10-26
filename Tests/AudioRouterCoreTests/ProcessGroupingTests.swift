@@ -116,4 +116,15 @@ final class ProcessGroupingTests: XCTestCase {
 
         XCTAssertEqual(Set(groups.map(\.key)), ["pid:400", "pid:401"])
     }
+
+    /// pid 鍵不能存檔：pid 會被重用，存下來的設定下次可能套到別的行程上。
+    func testOnlyBundleKeysArePersistent() {
+        let groups = AudioProcesses.makeGroups(from: [
+            process(1, pid: 400, bundleID: nil, name: "foo"),
+            process(2, pid: 401, bundleID: "com.example.app", name: "App"),
+        ]) { _ in nil }
+        let persistent = groups.filter { AudioProcesses.isPersistentKey($0.key) }.map(\.key)
+
+        XCTAssertEqual(persistent, ["com.example.app"])
+    }
 }

@@ -401,7 +401,7 @@ public final class RouteEngine {
                 // 峰值量測用截斷「之前」的值，電平表才能顯示出確實過載了。
                 let magnitude = abs(value)
                 if magnitude > channelPeak { channelPeak = magnitude }
-                // 音量可以開到 200%，超過 ±1.0 的樣本若原封不動交給下游，
+                // 音量上限是 1.0，但來源本身可能已經超過 ±1.0。這種樣本若原封不動交給下游，
                 // 各家驅動的處理方式不一定相同。這裡明確截斷，行為才可預期。
                 writeSample(max(-1, min(1, value)), channel: channel, frame: frame)
             }

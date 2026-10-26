@@ -233,6 +233,46 @@ public enum AudioDevices {
         Observer(queue: queue, handler: handler)
     }
 
+    /// 監看某個輸出裝置的音量與靜音（鍵盤音量鍵、控制中心改的都會通知）。token 釋放時自動移除。
+    public static func observeVolume(of device: AudioDevice, queue: DispatchQueue = .main, handler: @escaping () -> Void) -> Any {
+        VolumeObserver(device: device.id, queue: queue, handler: handler)
+    }
+
+    private final class VolumeObserver {
+        private let device: AudioObjectID
+        private let queue: DispatchQueue
+        private var blocks: [(AudioObjectPropertySelector, AudioObjectPropertyElement, AudioObjectPropertyListenerBlock)] = []
+
+        init(device: AudioObjectID, queue: DispatchQueue, handler: @escaping () -> Void) {
+            self.device = device
+            self.queue = queue
+            // 跟 volumeElements 一樣，音量可能在 main 或個別聲道上；掛不上的直接略過。
+            let targets: [(AudioObjectPropertySelector, AudioObjectPropertyElement)] = [
+                (kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyElementMain),
+                (kAudioDevicePropertyVolumeScalar, 1),
+                (kAudioDevicePropertyVolumeScalar, 2),
+                (kAudioDevicePropertyMute, kAudioObjectPropertyElementMain),
+            ]
+            for (selector, element) in targets {
+                if let block = device.addListener(
+                    selector, scope: kAudioObjectPropertyScopeOutput, element: element,
+                    queue: queue, handler: handler
+                ) {
+                    blocks.append((selector, element, block))
+                }
+            }
+        }
+
+        deinit {
+            for (selector, element, block) in blocks {
+                device.removeListener(
+                    selector, scope: kAudioObjectPropertyScopeOutput, element: element,
+                    queue: queue, block: block
+                )
+            }
+        }
+    }
+
     private final class Observer {
         private let queue: DispatchQueue
         private var blocks: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []

@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import CoreAudio
 import Foundation
@@ -35,8 +36,8 @@ public struct RouteSettings: Codable, Hashable, Sendable {
 /// 一個播放源在 UI 上的完整狀態。
 public struct RoutedApp: Identifiable, Hashable, Sendable {
     public let key: String
-    /// 目前正在跑的行程群組；App 沒在跑時為 nil（設定仍會保留）。
-    public let group: AudioProcessGroup?
+    /// 目前正在跑的行程群組。App 沒在跑時不會出現在清單上，設定仍會保留。
+    public let group: AudioProcessGroup
     public var settings: RouteSettings
     /// 這條路由目前是否真的有 tap 在跑。
     public let isActive: Bool
@@ -47,14 +48,14 @@ public struct RoutedApp: Identifiable, Hashable, Sendable {
     /// 指定的輸出裝置目前不在線上。設定會留著，裝置回來就自動恢復。
     /// 這一層只回報事實，要顯示什麼文案由 UI 決定。
     public let isOutputDeviceOffline: Bool
+    /// 建立失敗時的目標裝置 UID（「自動」時是當下的系統輸出）。UI 用它把該裝置標成無法使用。
+    public let failedDeviceUID: String?
 
     public var id: String { key }
-    public var name: String { group?.name ?? settings.displayName }
-    public var isRunning: Bool { group != nil }
-    public var isPlaying: Bool { group?.isPlaying ?? false }
-    public var isSystemProcess: Bool { group?.isSystemProcess ?? false }
-    /// 這個播放源底下有幾個發聲行程（瀏覽器之類會有獨立的音訊 helper）。
-    public var processCount: Int { group?.processes.count ?? 0 }
+    public var name: String { group.name }
+    /// 持續出聲超過寬限時間才算，過濾掉切換裝置時的瞬間誤報。原始狀態在 `group.isPlaying`。
+    public let isPlaying: Bool
+    public var isSystemProcess: Bool { group.isSystemProcess }
 }
 
 /// 統籌所有路由：追蹤行程與裝置變動、建立/銷毀引擎、存讀設定。
@@ -66,7 +67,14 @@ public final class RouterManager: ObservableObject {
     @Published public private(set) var inputDevices: [AudioDevice] = []
     @Published public private(set) var defaultOutput: AudioDevice?
     @Published public private(set) var defaultInput: AudioDevice?
+    /// 系統層級操作（切換系統輸出、調系統音量）失敗的訊息。個別路由的錯誤在 `RoutedApp.error`。
     @Published public var lastError: String?
+    /// 系統輸出裝置的硬體音量；裝置沒有音量控制時為 nil。
+    @Published public private(set) var systemVolume: Float?
+    /// 系統輸出裝置是否靜音。靜音不會改音量值，所以要另外讀。
+    @Published public private(set) var systemMuted = false
+    /// 音量為 0 或靜音的輸出裝置。指向這些裝置的 App 怎麼調都不會出聲，UI 據此顯示成靜音。
+    @Published public private(set) var silentOutputUIDs: Set<String> = []
 
     /// 是否把系統守護程序（CoreSpeech、audiomxd…）也列出來。
     /// 預設關閉：機器上通常有三十幾個這種行程，全開會把真正的 App 淹掉。
@@ -91,14 +99,24 @@ public final class RouterManager: ObservableObject {
     private var pendingStarts: Set<String> = []
     /// 最近一次掃描到的播放源。每輪 refresh 算一次，避免重複查詢 Core Audio。
     private var currentGroups: [AudioProcessGroup] = []
+    /// 每個播放源開始出聲的時間。建立或拆掉 tap 時 App 會被重新接線，HAL 會短暫回報它在輸出
+    /// （Spotify 暫停中也會），所以要連續出聲超過 `playingGrace` 才顯示成正在播放。
+    private var playingSince: [String: Date] = [:]
+    private static let playingGrace: TimeInterval = 2.5
 
     private var processObserver: Any?
     private var deviceObserver: Any?
+    /// 每個輸出裝置的音量／靜音監聽，裝置清單變動時重掛。
+    private var volumeObservers: [Any] = []
+    private var volumeObserverDeviceIDs: [AudioObjectID] = []
     /// 播放狀態的監聽器，只掛在清單上會顯示的 App。
     private var playbackObserver: AudioProcesses.PlaybackObserver?
     /// 目前監看中的行程，用來判斷是否需要重掛。
     private var watchedPlaybackIDs: [AudioObjectID] = []
     private let storeURL: URL
+    /// 延後中的存檔。拖滑桿時每一格都會呼叫 mutate，不能每格都寫一次檔。
+    private var pendingSave: DispatchWorkItem?
+    private var terminationObserver: Any?
 
     public init(storeURL: URL? = nil) {
         self.storeURL = storeURL ?? RouterManager.defaultStoreURL()
@@ -112,6 +130,12 @@ public final class RouterManager: ObservableObject {
         deviceObserver = AudioDevices.observeChanges(queue: .main) { [weak self] in
             Task { @MainActor in self?.refresh() }
         }
+        // 結束前把還沒寫出去的設定補寫，最後一次調整才不會遺失。
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveSettings() }
+        }
     }
 
     // MARK: - 對外操作
@@ -124,10 +148,14 @@ public final class RouterManager: ObservableObject {
         let clamped = max(0, min(1, volume))
         // 只調音量時走即時路徑，不必重建整條鏈。
         engines[key]?.volume = clamped
+        // 拉到 0 或從 0 拉上來都不在這裡切換靜音，由介面在放開滑桿後處理，
+        // 免得拖動途中整列就在群組間跳來跳去。
         mutate(key) { $0.volume = clamped }
     }
 
     public func setMuted(_ muted: Bool, forKey key: String) {
+        // 拉到 0 而靜音的，取消靜音時回到 100%，不然取消了還是沒聲音。
+        if !muted, settings[key]?.volume == 0 { setVolume(1, forKey: key) }
         engines[key]?.isMuted = muted
         mutate(key) { $0.muted = muted }
     }
@@ -149,17 +177,25 @@ public final class RouterManager: ObservableObject {
         rebuildSnapshot()
     }
 
-    /// 移除一筆已記住但目前沒在跑的設定。
-    public func forget(key: String) {
-        settings.removeValue(forKey: key)
-        teardownEngine(forKey: key)
-        saveSettings()
-        rebuildSnapshot()
-    }
-
     public func setSystemDefaultOutput(_ device: AudioDevice) {
         do { try AudioDevices.setDefaultOutput(device) } catch { lastError = "\(error)" }
         refresh()
+    }
+
+    public func setSystemVolume(_ volume: Float) {
+        guard let device = defaultOutput else { return }
+        do {
+            try AudioDevices.setVolume(volume, on: device)
+            systemVolume = max(0, min(1, volume))
+        } catch { lastError = "\(error)" }
+    }
+
+    public func setSystemMuted(_ muted: Bool) {
+        guard let device = defaultOutput else { return }
+        do {
+            try AudioDevices.setMuted(muted, on: device)
+            systemMuted = muted
+        } catch { lastError = "\(error)" }
     }
 
     public func setSystemDefaultInput(_ device: AudioDevice) {
@@ -178,7 +214,7 @@ public final class RouterManager: ObservableObject {
         if current.displayName.isEmpty { current.displayName = displayName(forKey: key) }
         body(&current)
         settings[key] = current
-        saveSettings()
+        scheduleSave()
         reconcile()
         rebuildSnapshot()
     }
@@ -194,11 +230,47 @@ public final class RouterManager: ObservableObject {
         inputDevices = AudioDevices.inputs()
         defaultOutput = AudioDevices.defaultOutput()
         defaultInput = AudioDevices.defaultInput()
+        readSystemVolume()
+        updateVolumeObserver()
         currentGroups = AudioProcesses.groups()
+        releaseOfflineDevices()
         reconcile()
         rebuildSnapshot()
         updatePlaybackObservers()
         writeDiagnosticSnapshot()
+    }
+
+    /// 指定的輸出裝置斷線（藍牙關掉、拔線）就改回「跟隨系統」，不等它回來。
+    /// ponytail: 裝置重新列舉時若短暫消失也會被清掉；真的遇到再加寬限時間。
+    private func releaseOfflineDevices() {
+        let online = Set(outputDevices.map(\.uid))
+        var changed = false
+        for (key, setting) in settings {
+            guard let uid = setting.outputDeviceUID, !online.contains(uid) else { continue }
+            settings[key]?.outputDeviceUID = nil
+            changed = true
+        }
+        if changed { saveSettings() }
+    }
+
+    private func readSystemVolume() {
+        systemVolume = defaultOutput.flatMap(AudioDevices.volume(of:))
+        systemMuted = defaultOutput.flatMap(AudioDevices.isMuted) ?? false
+        silentOutputUIDs = Set(outputDevices.filter {
+            AudioDevices.volume(of: $0) == 0 || AudioDevices.isMuted($0) == true
+        }.map(\.uid))
+    }
+
+    /// 音量變動只重讀音量，不走整個 refresh——拖音量鍵時通知很密。
+    private func updateVolumeObserver() {
+        let ids = outputDevices.map(\.id)
+        guard ids != volumeObserverDeviceIDs else { return }
+        volumeObserverDeviceIDs = ids
+        volumeObservers = outputDevices.map {
+            AudioDevices.observeVolume(of: $0, queue: .main) { [weak self] in
+                Task { @MainActor in self?.readSystemVolume() }
+            }
+        }
     }
 
     /// 只對清單上顯示得出來的 App 監看播放狀態。
@@ -324,22 +396,22 @@ public final class RouterManager: ObservableObject {
             // 已經有一個在背景建立中就不要再發動。
             guard !pendingStarts.contains(key) else { continue }
 
-            teardownEngine(forKey: key)
-
+            // 舊引擎先留著，等新的建好再換（engineDidStart）。先拆的話，tap 一拆
+            // 原本的輸出路徑就恢復了，建立期間會以原音量出聲——靜音的 App 也一樣。
+            // helper 行程加入或離開都會走到這裡，LINE、瀏覽器這類 App 很常發生。
             let engine = RouteEngine(
                 label: setting.displayName.isEmpty ? key : setting.displayName,
                 processObjectIDs: processIDs,
                 outputDeviceUID: deviceUID
             )
-            engine.volume = setting.volume
-            engine.isMuted = setting.muted
-            engine.balance = setting.balance
+            // 新舊兩個 tap 會短暫並存，新的先靜音，否則換手前會同時出兩份聲音。
+            // 真正的參數在換手時才套上。
+            engine.isMuted = true
 
             // RouteEngine.start() 會跟 coreaudiod 做同步 IPC，而那個呼叫可能長時間
             // 不返回（裝置正在重新列舉、或 coreaudiod 忙碌時都遇過）。在主執行緒上
             // 直接呼叫會讓整個 UI 凍住、連選單都打不開，所以丟到背景執行緒。
             pendingStarts.insert(key)
-            let displayName = setting.displayName.isEmpty ? key : setting.displayName
             Task.detached(priority: .userInitiated) { [weak self] in
                 do {
                     try engine.start()
@@ -349,7 +421,7 @@ public final class RouterManager: ObservableObject {
                 } catch {
                     await self?.engineDidFail(
                         key: key, deviceUID: deviceUID, processIDs: processIDs,
-                        displayName: displayName, message: "\(error)"
+                        message: "\(error)"
                     )
                 }
             }
@@ -364,12 +436,13 @@ public final class RouterManager: ObservableObject {
     ) {
         pendingStarts.remove(key)
 
-        // 建立期間設定可能已經改過。若期間已經有別的引擎接手，這個就沒用了。
-        guard engines[key] == nil else {
-            engine.stop()
-            rebuildSnapshot()
-            return
-        }
+        // 換手：先停舊的再套上真正的參數，兩步之間不會讓出主執行緒，所以不會漏音。
+        // 建立期間設定若已改成不需要引擎，下面的 reconcile 會把它收掉。
+        engines[key]?.stop()
+        let setting = settings(forKey: key)
+        engine.volume = setting.volume
+        engine.isMuted = setting.muted
+        engine.balance = setting.balance
 
         engines[key] = engine
         engineTargets[key] = (deviceUID, processIDs)
@@ -385,13 +458,11 @@ public final class RouterManager: ObservableObject {
         key: String,
         deviceUID: String,
         processIDs: [AudioObjectID],
-        displayName: String,
         message: String
     ) {
         pendingStarts.remove(key)
         engineErrors[key] = message
         failedTargets[key] = (deviceUID, processIDs)
-        lastError = "\(displayName)：\(message)"
         rebuildSnapshot()
         writeDiagnosticSnapshot()
     }
@@ -412,9 +483,25 @@ public final class RouterManager: ObservableObject {
         return !outputDevices.contains { $0.uid == uid }
     }
 
+    private func failedDeviceUID(forKey key: String) -> String? {
+        engineErrors[key] == nil ? nil : failedTargets[key]?.deviceUID
+    }
+
     private func rebuildSnapshot() {
-        var seen = Set<String>()
         var result: [RoutedApp] = []
+        let now = Date()
+        let previous = playingSince
+        playingSince = [:]
+        for group in currentGroups where group.isPlaying {
+            playingSince[group.key] = previous[group.key] ?? now
+        }
+        // 有新開始出聲的，寬限時間過後再算一次；那時還在出聲才會顯示。
+        if playingSince.values.contains(now) {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(Self.playingGrace + 0.1))
+                self?.rebuildSnapshot()
+            }
+        }
 
         for group in currentGroups {
             // 系統守護程序只在使用者主動要求時列出，但已經設定過的一律顯示，
@@ -423,7 +510,6 @@ public final class RouterManager: ObservableObject {
             let hasSettings = setting.map { !$0.isPassthrough } ?? false
             guard showsSystemProcesses || !group.isSystemProcess || hasSettings else { continue }
 
-            seen.insert(group.key)
             result.append(RoutedApp(
                 key: group.key,
                 group: group,
@@ -431,24 +517,17 @@ public final class RouterManager: ObservableObject {
                 isActive: engines[group.key]?.isRunning ?? false,
                 error: engineErrors[group.key],
                 isStarting: pendingStarts.contains(group.key),
-                isOutputDeviceOffline: isOutputDeviceOffline(setting)
+                isOutputDeviceOffline: isOutputDeviceOffline(setting),
+                failedDeviceUID: failedDeviceUID(forKey: group.key),
+                isPlaying: playingSince[group.key].map { now.timeIntervalSince($0) >= Self.playingGrace } ?? false
             ))
         }
 
-        // 有記住設定但目前沒在跑的 App，列在後面。
-        for (key, setting) in settings where !seen.contains(key) && !setting.isPassthrough {
-            result.append(RoutedApp(
-                key: key,
-                group: nil,
-                settings: setting,
-                isActive: false,
-                error: engineErrors[key],
-                isStarting: pendingStarts.contains(key),
-                isOutputDeviceOffline: isOutputDeviceOffline(setting)
-            ))
+        // groups() 用原始播放狀態排序，瞬間誤報會讓 App 跳到最上面；這裡改用過濾後的值重排。
+        apps = result.sorted { lhs, rhs in
+            if lhs.isPlaying != rhs.isPlaying { return lhs.isPlaying }
+            return AudioProcessGroup.listOrder(lhs.group, rhs.group)
         }
-
-        apps = result
     }
 
     // MARK: - 持久化
@@ -464,12 +543,25 @@ public final class RouterManager: ObservableObject {
         guard let data = try? Data(contentsOf: storeURL),
               let decoded = try? JSONDecoder().decode([String: RouteSettings].self, from: data)
         else { return }
-        settings = decoded
+        // 舊版會把 pid 鍵也寫進檔案，讀回來時丟掉。
+        settings = decoded.filter { AudioProcesses.isPersistentKey($0.key) }
+    }
+
+    /// 停手 0.5 秒後才寫檔。
+    private func scheduleSave() {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.saveSettings() }
+        }
+        pendingSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     private func saveSettings() {
+        pendingSave?.cancel()
+        pendingSave = nil
         // 已回到預設值的項目不必留在檔案裡。
-        let persisted = settings.filter { !$0.value.isPassthrough }
+        let persisted = settings.filter { !$0.value.isPassthrough && AudioProcesses.isPersistentKey($0.key) }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(persisted) else { return }

@@ -15,6 +15,8 @@
 	</array>
 	<key>CFBundleDisplayName</key>
 	<string>SoundRouter</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.soundrouter.app</string>
 	<key>CFBundleExecutable</key>
@@ -33,6 +35,9 @@
 	<!-- Core Audio process tap 需要這把鑰匙，否則系統連授權提示都不會跳，直接餵靜音。 -->
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>SoundRouter 需要擷取其他 App 的音訊，才能把它們分別導向不同的輸出裝置並單獨調整音量。</string>
+	<!-- 讀藍牙耳機／喇叭的電量要用 IOBluetooth，沒有這把鑰匙會被 TCC 直接終止。 -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>SoundRouter 需要藍牙權限，才能顯示藍牙耳機與喇叭的電量。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>SoundRouter 需要音訊擷取權限，才能重新導向各個 App 的聲音。</string>
 </dict>

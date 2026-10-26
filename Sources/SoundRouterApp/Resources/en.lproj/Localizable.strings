@@ -2,19 +2,57 @@
 "systemOutput.title" = "System output";
 
 /* Each row */
-"route.followSystem" = "Follow system";
+"route.followSystem" = "Follow System Output";
 "list.empty" = "No playback sources found";
-"row.notRunning" = "Not running";
 "row.playing" = "Playing";
-"row.helperProcesses" = "This app has %d audio-producing processes; the setting applies to all of them";
 "route.reset" = "Reset this app";
-"route.forget" = "Forget this setting";
 
 /* Footer */
 "loginItem.launchAtLogin" = "Launch at login";
 "loginItem.needsApproval" = "Needs approval in System Settings";
 "loginItem.failed" = "Could not change the login item: %@";
 "systemProcesses.toggleHelp" = "Show/hide system processes (background services such as CoreSpeech and audiomxd)";
+"app.soundSettings" = "Sound Settings…";
 "app.quit" = "Quit";
 "route.auto" = "Auto";
 "device.offline" = "The selected output device is offline; using the system output until it comes back.";
+
+/* System output section */
+"systemOutput.current" = "Current output";
+"systemVolume.label" = "System volume";
+"systemVolume.mute" = "Mute system volume";
+"systemVolume.unmute" = "Unmute system volume";
+
+/* Groups */
+"group.playing" = "Playing";
+"group.other" = "Other Apps";
+"group.muted" = "Muted";
+
+/* Each row */
+"row.muted" = "Muted";
+"row.mute" = "Mute %@";
+"row.unmute" = "Unmute %@";
+"row.volume" = "%@ volume";
+"row.outputSilent" = "Output muted";
+"route.menuTitle" = "Output for %@";
+"route.buttonLabel" = "%1$@ output: %2$@";
+"device.unavailable" = "Unavailable";
+
+/* Transport types */
+"transport.builtIn" = "Built-in";
+"transport.bluetooth" = "Bluetooth";
+"transport.virtual" = "Virtual";
+"transport.aggregate" = "Aggregate";
+"transport.other" = "Other";
+
+/* Error banner */
+"error.deviceUnavailable" = "%@ unavailable";
+"error.devicesUnavailable" = "%d devices unavailable";
+"error.route.summary" = "Couldn't route audio to this output";
+"error.generic.title" = "A setting couldn't be applied";
+"error.generic.summary" = "Open Details to see why";
+"error.details" = "Details";
+"error.hide" = "Hide";
+
+/* Footer */
+"systemProcesses.show" = "Show system processes";

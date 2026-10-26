@@ -10,18 +10,38 @@ APP="build/SoundRouter.app"
 
 # 建成 universal binary。開發時只跑自己的架構比較快，但這支腳本產出的是
 # 要拿來用（或發布）的 .app，Intel 機器也該跑得起來。
-ARCHS=(--arch arm64 --arch x86_64)
+#
+# 不用 `swift build --arch arm64 --arch x86_64` 一次建完：多個 --arch 會讓 SwiftPM
+# 改走 XCBuild 後端，而它（Swift 6.1）不認得 swiftLanguageMode(.v5)，直接建置失敗。
+# 所以分架構各建一次，再用 lipo 合併。
+ARCHS=(arm64 x86_64)
+for arch in "${ARCHS[@]}"; do
+    swift build -c "$CONFIG" --arch "$arch" --product SoundRouterApp
+    swift build -c "$CONFIG" --arch "$arch" --product audiorouter
+done
 
-swift build -c "$CONFIG" "${ARCHS[@]}" --product SoundRouterApp
-swift build -c "$CONFIG" "${ARCHS[@]}" --product audiorouter
-
-BIN_DIR="$(swift build -c "$CONFIG" "${ARCHS[@]}" --show-bin-path)"
+BIN_DIR="build/universal"
+rm -rf "$BIN_DIR"
+mkdir -p "$BIN_DIR"
+ARCH_DIRS=()
+for arch in "${ARCHS[@]}"; do
+    ARCH_DIRS+=("$(swift build -c "$CONFIG" --arch "$arch" --show-bin-path)")
+done
+for product in SoundRouterApp audiorouter; do
+    lipo -create "${ARCH_DIRS[@]/%//$product}" -output "$BIN_DIR/$product"
+done
+# 資源 bundle 與架構無關，取任一份即可。
+for bundle in "${ARCH_DIRS[0]}"/*.bundle; do
+    [ -e "$bundle" ] || continue
+    cp -R "$bundle" "$BIN_DIR/"
+done
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN_DIR/SoundRouterApp" "$APP/Contents/MacOS/SoundRouterApp"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
+cp Packaging/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # SwiftPM 把本地化字串放進執行檔旁邊的 .bundle。這個 .app 是手工組裝的，
 # 不搬過去的話 Bundle.module 找不到資源，介面會退回顯示 key 本身。

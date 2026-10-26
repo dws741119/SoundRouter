@@ -2,19 +2,57 @@
 "systemOutput.title" = "系統輸出";
 
 /* 每一列 */
-"route.followSystem" = "跟隨系統";
+"route.followSystem" = "跟隨系統輸出";
 "list.empty" = "找不到任何播放源";
-"row.notRunning" = "未執行";
 "row.playing" = "正在播放";
-"row.helperProcesses" = "這個 App 有 %d 個發聲行程，會一起套用設定";
-"route.reset" = "重設這個 App";
-"route.forget" = "移除這筆設定";
+"route.reset" = "重設此 App";
 
 /* footer */
 "loginItem.launchAtLogin" = "開機時自動啟動";
 "loginItem.needsApproval" = "需要在系統設定裡允許";
 "loginItem.failed" = "設定開機啟動失敗：%@";
 "systemProcesses.toggleHelp" = "顯示／隱藏系統程序（CoreSpeech、audiomxd 之類的背景服務）";
+"app.soundSettings" = "聲音設定…";
 "app.quit" = "結束";
 "route.auto" = "自動";
 "device.offline" = "選定的輸出裝置目前不在線上，暫時使用系統輸出。裝置接回來後會自動恢復。";
+
+/* 系統輸出區 */
+"systemOutput.current" = "目前輸出";
+"systemVolume.label" = "系統音量";
+"systemVolume.mute" = "系統靜音";
+"systemVolume.unmute" = "取消系統靜音";
+
+/* 分組 */
+"group.playing" = "正在播放";
+"group.other" = "其他 App";
+"group.muted" = "已靜音";
+
+/* 每一列 */
+"row.muted" = "靜音";
+"row.mute" = "%@ 靜音";
+"row.unmute" = "%@ 取消靜音";
+"row.volume" = "%@ 音量";
+"row.outputSilent" = "輸出已靜音";
+"route.menuTitle" = "%@ 的輸出裝置";
+"route.buttonLabel" = "%1$@ 輸出裝置：%2$@";
+"device.unavailable" = "無法使用";
+
+/* 連接類型 */
+"transport.builtIn" = "內建";
+"transport.bluetooth" = "藍牙";
+"transport.virtual" = "虛擬";
+"transport.aggregate" = "聚合";
+"transport.other" = "其他";
+
+/* 錯誤提示條 */
+"error.deviceUnavailable" = "%@無法使用";
+"error.devicesUnavailable" = "%d 個裝置無法使用";
+"error.route.summary" = "無法把聲音導到這個輸出";
+"error.generic.title" = "有設定無法套用";
+"error.generic.summary" = "展開詳細資訊查看原因";
+"error.details" = "詳細資訊";
+"error.hide" = "收合";
+
+/* footer */
+"systemProcesses.show" = "顯示系統程序";
